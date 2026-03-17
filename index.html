@@ -2962,6 +2962,103 @@ renderFolders();
 applyWidgetOrder();
 applyHiddenWidgets();
 initDragDrop();
+/* ═══ WEATHER ═══ */
+const WMO = {
+  0:{i:'☀️',d:'Clear sky'},1:{i:'🌤️',d:'Mainly clear'},2:{i:'⛅',d:'Partly cloudy'},3:{i:'☁️',d:'Overcast'},
+  45:{i:'🌫️',d:'Foggy'},48:{i:'🌫️',d:'Icy fog'},51:{i:'🌦️',d:'Light drizzle'},53:{i:'🌦️',d:'Drizzle'},
+  55:{i:'🌧️',d:'Heavy drizzle'},61:{i:'🌧️',d:'Light rain'},63:{i:'🌧️',d:'Rain'},65:{i:'🌧️',d:'Heavy rain'},
+  71:{i:'❄️',d:'Light snow'},73:{i:'🌨️',d:'Snow'},75:{i:'🌨️',d:'Heavy snow'},80:{i:'🌦️',d:'Showers'},
+  81:{i:'🌦️',d:'Showers'},82:{i:'⛈️',d:'Heavy showers'},95:{i:'⛈️',d:'Thunderstorm'},
+  96:{i:'⛈️',d:'Hail storm'},99:{i:'⛈️',d:'Severe storm'},
+};
+
+async function loadWeather() {
+  const wb = document.getElementById('weather-body');
+  const cached = ld('weatherCache', null);
+  if (cached && (Date.now() - cached.ts) < 1800000) { renderWeather(cached); return; }
+  try {
+    const pos = await new Promise((res, rej) =>
+      navigator.geolocation.getCurrentPosition(res, rej, {timeout:10000}));
+    const {latitude:lat, longitude:lon} = pos.coords;
+    const [wRes, gRes] = await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`),
+      fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=en`),
+    ]);
+    const wData = await wRes.json(), gData = await gRes.json();
+    const city = gData.address.city || gData.address.town || gData.address.village || gData.address.state || 'Your Location';
+    const country = gData.address.country_code?.toUpperCase() || '';
+    const cache = {
+      ts:Date.now(), city, country,
+      temp:  Math.round(wData.current.temperature_2m),
+      feels: Math.round(wData.current.apparent_temperature),
+      humidity: wData.current.relative_humidity_2m,
+      wind:  Math.round(wData.current.wind_speed_10m),
+      code:  wData.current.weather_code,
+      maxT:  Math.round(wData.daily.temperature_2m_max[0]),
+      minT:  Math.round(wData.daily.temperature_2m_min[0]),
+    };
+    sd('weatherCache', cache); renderWeather(cache);
+  } catch {
+    document.getElementById('weather-body').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:12px;color:var(--text3);font-family:var(--font-mono)">Location unavailable. Enter city:</div>
+        <div style="display:flex;gap:8px">
+          <input class="fi" id="weather-manual" placeholder="Enter city name" style="flex:1"
+            onkeydown="if(event.key==='Enter')fetchWeatherByCity()">
+          <button class="fbtn on" onclick="fetchWeatherByCity()">Get</button>
+        </div>
+      </div>`;
+  }
+}
+
+async function fetchWeatherByCity() {
+  const city = document.getElementById('weather-manual')?.value?.trim();
+  if (!city) return;
+  document.getElementById('weather-body').innerHTML =
+    '<div class="weather-loading"><div class="w-spinner"></div><span>Fetching weather…</span></div>';
+  try {
+    const gRes  = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1&accept-language=en`);
+    const gData = await gRes.json();
+    if (!gData.length) { showToast('City not found'); return; }
+    const {lat, lon} = gData[0];
+    const wRes  = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`);
+    const wData = await wRes.json();
+    const cache = {
+      ts:Date.now(), city:gData[0].display_name.split(',')[0], country:'',
+      temp:  Math.round(wData.current.temperature_2m),
+      feels: Math.round(wData.current.apparent_temperature),
+      humidity: wData.current.relative_humidity_2m,
+      wind:  Math.round(wData.current.wind_speed_10m),
+      code:  wData.current.weather_code,
+      maxT:  Math.round(wData.daily.temperature_2m_max[0]),
+      minT:  Math.round(wData.daily.temperature_2m_min[0]),
+    };
+    sd('weatherCache', cache); renderWeather(cache);
+  } catch { showToast('Failed to fetch weather'); }
+}
+
+function renderWeather(d) {
+  const wmo = WMO[d.code] || {i:'🌡️', d:'Unknown'};
+  document.getElementById('weather-body').innerHTML = `
+    <div class="weather-wrap">
+      <div class="weather-main">
+        <div class="weather-ico">${wmo.i}</div>
+        <div class="weather-temp">${d.temp}°<span style="font-size:20px;color:var(--text3)">C</span></div>
+        <div class="weather-desc">${wmo.d}</div>
+        <div class="weather-city">📍 ${d.city}${d.country ? ', ' + d.country : ''}</div>
+      </div>
+      <div class="weather-stats">
+        <div class="weather-stat"><div class="ws-label">Feels like</div><div class="ws-val">${d.feels}°C</div></div>
+        <div class="weather-stat"><div class="ws-label">Humidity</div><div class="ws-val">${d.humidity}%</div></div>
+        <div class="weather-stat"><div class="ws-label">Wind</div><div class="ws-val">${d.wind} km/h</div></div>
+        <div class="weather-stat"><div class="ws-label">High / Low</div><div class="ws-val">${d.maxT}° / ${d.minT}°</div></div>
+      </div>
+    </div>
+    <div style="text-align:right;margin-top:10px">
+      <button class="case-btn" onclick="sd('weatherCache',null);loadWeather()">↻ Refresh</button>
+    </div>`;
+}
+
 loadWeather();
 syncLightningSliders();
 </script>
